@@ -1,0 +1,6 @@
+# Optional workaround; no longer needed on OMR after the permanent firewall fix.
+# Runtime networking remains in compose.yaml. Not loaded automatically.
+services:
+  init:
+    build:
+      network: host

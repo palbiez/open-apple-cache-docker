@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+device=$(awk '$2=="/mnt/data" && $3=="ext4" {print $1}' /proc/mounts)
+[ -n "$device" ] || { echo 'Required /mnt/data ext4 mount is missing' >&2; exit 1; }
+block info "$device" | grep -q 'UUID="REPLACE_WITH_DATA_VOLUME_UUID"'
+cd /mnt/data/cacheserver/config
+ready=0
+for attempt in $(seq 1 30); do
+    if docker info >/dev/null 2>&1; then ready=1; break; fi
+    sleep 1
+done
+[ "$ready" = 1 ]
+docker compose config --quiet
+network=$(docker compose config --format json | jq -r '.networks.gui_backend.name')
+docker network inspect "$network" >/dev/null
+if [ "${1:-}" = --check ]; then
+    echo 'Cache mount, UUID, Docker, shared network and Compose checks passed'
+    exit 0
+fi
+# At boot use the already pulled image, even while Internet is still coming up.
+exec docker compose up -d --no-build --pull never

@@ -1,0 +1,21 @@
+{
+  "push-token": "GENERATE_A_RANDOM_32_BYTE_BASE64_VALUE",
+  "ranked-peers": true,
+  "details": {
+    "capabilities": {"ur": true, "sc": true, "query-parameters": true},
+    "cache-size": 214748364800,
+    "ac-power": true,
+    "is-portable": false,
+    "local-network": [{"speed": 1000, "wired": true}]
+  },
+  "local-ranges-only": true,
+  "local-ranges": [{"first": "192.168.1.1", "last": "192.168.1.254"}],
+  "cache-software": [
+    {"type": "cache", "name": "Open Apple Cache", "version": "1.0.0"},
+    {"build": "26.04", "type": "system", "name": "Ubuntu", "version": "26.04"}
+  ],
+  "guid": "REPLACE_WITH_A_STABLE_UUID",
+  "local-addresses": [
+    {"address": "192.168.1.50", "netmask": "255.255.255.0", "port": "8080"}
+  ]
+}

@@ -1,0 +1,99 @@
+name: open-apple-cache-test
+
+x-cache-environment: &cache-environment
+  CACHE_IP: ${CACHE_IP:?Set CACHE_IP in .env}
+  # Client networks are checked at the gateway; the app sees its proxy address.
+  ALLOWED_CLIENTS: ${ALLOWED_CLIENTS:?Set ALLOWED_CLIENTS in .env},${WIREGUARD_NETWORK:-10.77.0.0/16},${GATEWAY_BACKEND_IP:-172.30.20.2}/32
+  ADMIN_PORT: ${ADMIN_PORT:-8446}
+  CACHE_MAX_GIB: ${CACHE_MAX_GIB:-50}
+  RESERVE_GIB: ${RESERVE_GIB:-10}
+  MAX_OBJECT_GIB: ${MAX_OBJECT_GIB:-20}
+  MAX_DOWNLOADS: ${MAX_DOWNLOADS:-2}
+
+services:
+  init:
+    image: ${IMAGE_REPOSITORY:-palbiez1984/cacheserver}:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-always}
+    platform: linux/amd64
+    build:
+      context: .
+      args:
+        UPSTREAM_COMMIT: ${UPSTREAM_COMMIT:-68c69e693877f6351b960b755784852f55aa854f}
+    user: "0:0"
+    entrypoint: ["python3", "/opt/open-apple-cache/bootstrap.py"]
+    command: []
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      disable: true
+    environment: *cache-environment
+    volumes:
+      - type: bind
+        source: ${CONFIG_DIR:?Set CONFIG_DIR in .env}
+        target: /etc/open-apple-cache
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${DATA_DIR:?Set DATA_DIR in .env}
+        target: /var/lib/open-apple-cache
+        bind: {create_host_path: false}
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+
+  cache:
+    image: ${IMAGE_REPOSITORY:-palbiez1984/cacheserver}:${IMAGE_TAG:-latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-always}
+    platform: linux/amd64
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    user: "10001:10001"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Track init settings so `up` recreates the cache after configuration changes.
+    environment: *cache-environment
+    networks:
+      default:
+        gw_priority: 1
+      gui_backend:
+        ipv4_address: ${CACHE_BACKEND_IP:-172.30.20.8}
+    volumes:
+      - type: bind
+        source: ${CONFIG_DIR:?Set CONFIG_DIR in .env}
+        target: /etc/open-apple-cache
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${DATA_DIR:?Set DATA_DIR in .env}
+        target: /var/lib/open-apple-cache
+        bind: {create_host_path: false}
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    mem_limit: ${MEM_LIMIT:-1g}
+    cpus: ${CPU_LIMIT:-1.0}
+    pids_limit: 128
+    stop_grace_period: 30s
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-apple-cache
+  gui_backend:
+    external: true
+    name: ${GUI_BACKEND_NETWORK:-proxy-guis_backend}

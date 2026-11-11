@@ -1,0 +1,75 @@
+# Generic Linux Docker host; independent of the optional OMR gateway deployment.
+name: open-apple-cache
+
+x-environment: &environment
+  CACHE_IP: ${CACHE_IP:?Set the Docker host LAN IPv4 address}
+  ALLOWED_CLIENTS: ${ALLOWED_CLIENTS:?Set explicit client IPv4 CIDRs}
+  ADMIN_PORT: ${ADMIN_PORT:-8443}
+  CACHE_MAX_GIB: ${CACHE_MAX_GIB:-50}
+  RESERVE_GIB: ${RESERVE_GIB:-10}
+  MAX_OBJECT_GIB: ${MAX_OBJECT_GIB:-20}
+  MAX_DOWNLOADS: ${MAX_DOWNLOADS:-2}
+
+x-runtime: &runtime
+  image: ${IMAGE_REPOSITORY:-local/open-apple-cache}:${IMAGE_TAG:-docker}
+  pull_policy: ${IMAGE_PULL_POLICY:-never}
+  platform: linux/amd64
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp:size=64m,mode=1777"]
+  environment: *environment
+
+services:
+  init:
+    <<: *runtime
+    build:
+      context: .
+      args:
+        UPSTREAM_COMMIT: ${UPSTREAM_COMMIT:-68c69e693877f6351b960b755784852f55aa854f}
+    user: "0:0"
+    entrypoint: ["python3", "/opt/open-apple-cache/bootstrap.py"]
+    command: []
+    restart: "no"
+    network_mode: none
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    healthcheck: {disable: true}
+    volumes:
+      - type: bind
+        source: ${CONFIG_DIR:?Create CONFIG_DIR before starting}
+        target: /etc/open-apple-cache
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${DATA_DIR:?Create DATA_DIR before starting}
+        target: /var/lib/open-apple-cache
+        bind: {create_host_path: false}
+
+  cache:
+    <<: *runtime
+    user: "10001:10001"
+    restart: unless-stopped
+    init: true
+    depends_on:
+      init: {condition: service_completed_successfully}
+    ports:
+      - "${CACHE_IP}:${CACHE_PORT:-8080}:8080"
+      - "${CACHE_IP}:${ADMIN_PORT:-8443}:8443"
+    volumes:
+      - type: bind
+        source: ${CONFIG_DIR:?Create CONFIG_DIR before starting}
+        target: /etc/open-apple-cache
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${DATA_DIR:?Create DATA_DIR before starting}
+        target: /var/lib/open-apple-cache
+        bind: {create_host_path: false}
+    mem_limit: ${MEM_LIMIT:-1g}
+    cpus: ${CPU_LIMIT:-1.0}
+    pids_limit: 128
+    stop_grace_period: 30s
+    ulimits:
+      nofile: {soft: 8192, hard: 8192}
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

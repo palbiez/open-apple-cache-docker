@@ -1,0 +1,8 @@
+# Inside inet fw4; loaded persistently by firewall4.
+# An A/B test reproduced Apple TLS timeouts at the default tunnel MSS, with
+# successful downloads at MSS 1200. Restrict this to the cache bridge and tun0.
+chain apple_cache_vpn_mss {
+    type filter hook postrouting priority 99; policy accept;
+    iifname "br-apple-cache" oifname "tun0" tcp flags & (fin | syn | rst) == syn tcp option maxseg size > 1200 counter tcp option maxseg size set 1200 comment "Apple cache VPN MSS cap"
+    iifname "tun0" oifname "br-apple-cache" tcp flags & (fin | syn | rst) == syn tcp option maxseg size > 1200 counter tcp option maxseg size set 1200 comment "Apple cache VPN reverse MSS cap"
+}
