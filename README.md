@@ -95,6 +95,11 @@ several minutes and request the same eligible public download on two devices.
 
 ## Smoke test and connection refused
 
+For Apple clients using a PAC/Squid proxy, add the selective Apple bypass
+described in [APPLE-PROXY.md](APPLE-PROXY.md), with a reusable
+[PAC helper](examples/apple-direct.js). Native discovery then chooses the
+registered content cache; other proxy and package-cache rules can stay in place.
+
 From inside the cache container, use its own HTTP listener:
 
 ```sh

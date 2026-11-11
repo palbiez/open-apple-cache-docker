@@ -47,6 +47,13 @@ No private runtime logs, signed URLs or site configuration are included.
 
 ## Docker integration and helper checks
 
+Selective Apple PAC bypass: 44 Windows JScript routing cases and 10 checks
+against the served PAC using Windows WinHTTP passed. Existing non-Apple routes
+were retained, with Squid HTTP/HTTPS still functional and private proxy targets
+still denied. The provided PAC helper matches the checked rule; no private PAC
+configuration is included. See [APPLE-PROXY.md](APPLE-PROXY.md). A native-device
+download after the PAC refresh is a separate remaining check.
+
 Earlier checks of the integration passed: standalone Compose config/build,
 init exit 0, HTTP/HTTPS health, published ports, generated TLS IP SAN,
 MISS/HIT/range smoke, and restart/reinitialization preserving identity/TLS.
