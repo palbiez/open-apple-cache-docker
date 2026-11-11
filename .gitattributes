@@ -1,2 +1,2 @@
-* text=auto eol=lf
-*.zip binary
+# Unified-diff context markers are part of the patch format.
+*.patch text eol=lf -whitespace

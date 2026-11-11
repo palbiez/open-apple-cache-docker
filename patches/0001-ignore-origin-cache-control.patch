@@ -1,0 +1,316 @@
+diff --git a/cache_test.go b/cache_test.go
+index f5f24cf..a33f8eb 100644
+--- a/cache_test.go
++++ b/cache_test.go
+@@ -261,7 +261,7 @@ func TestPartialMissAndExactReuse(t *testing.T) {
+ }
+ 
+ func TestPrivacyFreshnessAndNoCache(t *testing.T) {
+-	for _, h := range []map[string]string{{"Cache-Control": "private, max-age=600"}, {"Cache-Control": "no-store, max-age=600"}, {"Cache-Control": "public, max-age=0"}, {"Cache-Control": "public, max-age=600", "Vary": "Accept-Language"}, {"Cache-Control": "public, max-age=600", "Set-Cookie": "session=x"}, {"Cache-Control": "public, max-age=600", "Age": "700"}} {
++	for _, h := range []map[string]string{{"Cache-Control": "private", "Vary": "Accept-Language"}, {"Cache-Control": "no-store", "Set-Cookie": "session=x"}, {"Cache-Control": "public", "Content-Encoding": "gzip"}} {
+ 		p, _ := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+ 			for k, v := range h {
+ 				w.Header().Set(k, v)
+@@ -628,16 +628,16 @@ func TestFreshnessAndContentRange(t *testing.T) {
+ 	now := time.Now()
+ 	h := http.Header{"Cache-Control": []string{"max-age=600"}, "Age": []string{"400"}}
+ 	ex, ok := freshUntil(h, now, 3600)
+-	if !ok || int(ex.Sub(now).Seconds()) != 200 {
+-		t.Fatal("age")
++	if !ok || int(ex.Sub(now).Seconds()) != 3600 {
++		t.Fatal("local retention must not depend on origin age/max-age")
+ 	}
+ 	h = http.Header{"Cache-Control": []string{"max-age=600", "s-maxage=0"}}
+-	if _, ok = freshUntil(h, now, 3600); ok {
+-		t.Fatal("s-maxage ignored")
++	if ex, ok = freshUntil(h, now, 3600); !ok || int(ex.Sub(now).Seconds()) != 3600 {
++		t.Fatal("s-maxage must not prevent local storage")
+ 	}
+ 	h = http.Header{"Cache-Control": []string{"max-age=600", "no-store"}}
+-	if _, ok = freshUntil(h, now, 3600); ok {
+-		t.Fatal("second directive ignored")
++	if ex, ok = freshUntil(h, now, 3600); !ok || int(ex.Sub(now).Seconds()) != 3600 {
++		t.Fatal("origin no-store must not prevent local storage")
+ 	}
+ 	for _, tc := range []struct {
+ 		cr, r string
+diff --git a/main.go b/main.go
+index 69cbefd..8d3d7fe 100644
+--- a/main.go
++++ b/main.go
+@@ -53,6 +53,7 @@ func main() {
+ 		}()
+ 	}
+ 	slog.Info("cache started", "listen", c.Listen, "registration", "external_helper", "data_dir", c.DataDir)
++	slog.Info("local cache policy", "origin_cache_control", "ignored", "retention_seconds", c.MaxTTLSeconds)
+ 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+ 		slog.Error("server", "error", err)
+ 		os.Exit(1)
+diff --git a/origin_policy_test.go b/origin_policy_test.go
+new file mode 100644
+index 0000000..c0b136b
+--- /dev/null
++++ b/origin_policy_test.go
+@@ -0,0 +1,140 @@
++package main
++
++import (
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func TestOriginCacheControlNeverPreventsStorage(t *testing.T) {
++	for _, directives := range [][]string{
++		nil,
++		{"private"},
++		{"no-store"},
++		{"no-cache"},
++		{"private, no-store, no-cache, max-age=0, s-maxage=0"},
++		{"max-age=0", "private", "no-store"},
++		{"public, max-age=1"},
++		{"private=\"X-Example\""},
++		{"unknown-directive, max-age=invalid"},
++	} {
++		t.Run(strings.Join(directives, ";"), func(t *testing.T) {
++			var downloads atomic.Int64
++			p, _ := fixture(t, func(w http.ResponseWriter, r *http.Request) {
++				downloads.Add(1)
++				for _, directive := range directives {
++					w.Header().Add("Cache-Control", directive)
++				}
++				w.Header().Set("Age", "259200")
++				w.Header().Set("Date", time.Now().Add(-72*time.Hour).UTC().Format(http.TimeFormat))
++				w.Header().Set("Expires", time.Unix(1, 0).UTC().Format(http.TimeFormat))
++				w.Header().Set("Content-Length", "11")
++				io.WriteString(w, "app-package")
++			})
++			// Not restricted to an extension or special package path: every
++			// configured origin follows the same origin-header policy.
++			path := "/ordinary-download.bin?source=origin.test"
++			first := call(p, "GET", path, nil)
++			second := call(p, "GET", path, nil)
++			if first.Header().Get("X-Open-Apple-Cache") != "MISS" || second.Header().Get("X-Open-Apple-Cache") != "HIT" || downloads.Load() != 1 {
++				t.Fatalf("origin directives prevented storage: first=%s second=%s downloads=%d", first.Header().Get("X-Open-Apple-Cache"), second.Header().Get("X-Open-Apple-Cache"), downloads.Load())
++			}
++			if first.Body.String() != "app-package" || second.Body.String() != "app-package" {
++				t.Fatal("response body changed")
++			}
++			if strings.Join(second.Header().Values("Cache-Control"), ";") != strings.Join(directives, ";") {
++				t.Fatal("origin Cache-Control must still be forwarded")
++			}
++			u, _ := url.Parse("http://origin.test/ordinary-download.bin")
++			objects := p.store.candidates(contentIdentity(u), "")
++			if len(objects) != 1 {
++				t.Fatal("expected one persisted object")
++			}
++			for _, object := range objects {
++				if remaining := time.Until(object.Expires); remaining < 59*time.Minute || remaining > time.Hour {
++					t.Fatalf("unexpected local retention: %s", remaining)
++				}
++			}
++		})
++	}
++}
++
++func TestPrivateSignedPackageAliasAndRestart(t *testing.T) {
++	for _, requestRange := range []string{"", "bytes=2-5"} {
++		t.Run(requestRange, func(t *testing.T) {
++			var downloads atomic.Int64
++			p, c := fixture(t, func(w http.ResponseWriter, r *http.Request) {
++				downloads.Add(1)
++				w.Header().Set("Cache-Control", "private, no-store, no-cache, max-age=0")
++				w.Header().Set("ETag", "\"stable-app-version\"")
++				http.ServeContent(w, r, "app.ipa", time.Unix(1700000000, 0), strings.NewReader("0123456789abcdef"))
++			})
++			p.c.Origins = map[string]string{"iosapps.itunes.apple.com": "both"}
++			c.Origins = p.c.Origins
++			path := "/itunes-assets/Purple221/v4/version/app.ipa?source=iosapps.itunes.apple.com&token="
++			headers := map[string]string{}
++			if requestRange != "" {
++				headers["Range"] = requestRange
++			}
++			first := call(p, "GET", path+"first", headers)
++			second := call(p, "GET", path+"rotated", headers)
++			third := call(p, "GET", path+"rotated", headers)
++			if first.Header().Get("X-Open-Apple-Cache") != "MISS" || second.Header().Get("X-Open-Apple-Cache") != "HIT" || third.Header().Get("X-Open-Apple-Cache") != "HIT" || downloads.Load() != 2 {
++				t.Fatalf("private signed package not reused: first=%s second=%s third=%s origin=%d", first.Header().Get("X-Open-Apple-Cache"), second.Header().Get("X-Open-Apple-Cache"), third.Header().Get("X-Open-Apple-Cache"), downloads.Load())
++			}
++			for _, response := range []*httptest.ResponseRecorder{first, second, third} {
++				want := "0123456789abcdef"
++				if requestRange != "" {
++					want = "2345"
++					if response.Code != http.StatusPartialContent {
++						t.Fatal("partial status changed")
++					}
++				}
++				if response.Body.String() != want || response.Header().Get("X-Apple-Cache-Session") == "" || response.Header().Get("X-Apple-Cached-Ranges") == "" {
++					t.Fatal("body or Apple cache headers missing")
++				}
++			}
++			p2, err := newProxy(c)
++			if err != nil {
++				t.Fatal(err)
++			}
++			p2.client.Transport = p.client.Transport
++			afterRestart := call(p2, "GET", path+"after-restart", headers)
++			if afterRestart.Header().Get("X-Open-Apple-Cache") != "HIT" || downloads.Load() != 3 {
++				t.Fatal("persisted private package not revalidated/reused")
++			}
++		})
++	}
++}
++
++func TestPrivateAliasStillRejectsChangedRepresentation(t *testing.T) {
++	for _, change := range []string{"etag", "length"} {
++		t.Run(change, func(t *testing.T) {
++			p, _ := fixture(t, func(w http.ResponseWriter, r *http.Request) {
++				w.Header().Set("Cache-Control", "private")
++				body, etag := "old-body", "\"v1\""
++				if r.URL.Query().Get("token") == "changed" {
++					if change == "etag" {
++						body, etag = "new-body", "\"v2\""
++					} else {
++						body = "longer-new-body"
++					}
++				}
++				w.Header().Set("ETag", etag)
++				http.ServeContent(w, r, "app.ipa", time.Unix(1700000000, 0), strings.NewReader(body))
++			})
++			p.c.Origins = map[string]string{"iosapps.itunes.apple.com": "both"}
++			path := "/Purple221/app.ipa?source=iosapps.itunes.apple.com&token="
++			call(p, "GET", path+"first", nil)
++			changed := call(p, "GET", path+"changed", nil)
++			if changed.Header().Get("X-Open-Apple-Cache") != "MISS" || changed.Body.String() == "old-body" {
++				t.Fatal("different object incorrectly aliased")
++			}
++		})
++	}
++}
+diff --git a/proxy.go b/proxy.go
+index 5c85a18..82681ae 100644
+--- a/proxy.go
++++ b/proxy.go
+@@ -243,9 +243,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	defer resp.Body.Close()
+ 	headers := safeHeaders(resp.Header)
+ 	expires, policyAllowsStore := freshUntil(resp.Header, time.Now(), p.c.MaxTTLSeconds)
+-	if !policyAllowsStore && sharedApplePackage(u) && safeAppleFallback(resp.Header) {
+-		expires, policyAllowsStore = time.Now().Add(time.Duration(p.c.MaxTTLSeconds)*time.Second), true
+-	}
+ 	bypassReason := ""
+ 	switch {
+ 	case !cacheRequest:
+@@ -402,11 +399,7 @@ func (p *Proxy) originIdentity(r *http.Request, u *url.URL, method string) (stri
+ 		return "", 0, false
+ 	}
+ 	defer resp.Body.Close()
+-	if resp.Header.Get("Set-Cookie") != "" || resp.Header.Get("Vary") != "" {
+-		return "", 0, false
+-	}
+-	control := strings.ToLower(strings.Join(resp.Header.Values("Cache-Control"), ","))
+-	if strings.Contains(control, "private") || strings.Contains(control, "no-store") {
++	if resp.Header.Get("Set-Cookie") != "" || resp.Header.Get("Vary") != "" || (resp.Header.Get("Content-Encoding") != "" && resp.Header.Get("Content-Encoding") != "identity") {
+ 		return "", 0, false
+ 	}
+ 	etag := strongETag(resp.Header.Get("ETag"))
+@@ -453,14 +446,6 @@ func sharedApplePackage(u *url.URL) bool {
+ 	return strings.Contains(p, "/purple") || strings.Contains(p, "/publication") || strings.Contains(p, "/cobalt")
+ }
+ 
+-func safeAppleFallback(h http.Header) bool {
+-	if h.Get("Set-Cookie") != "" || h.Get("Vary") != "" || (h.Get("Content-Encoding") != "" && h.Get("Content-Encoding") != "identity") {
+-		return false
+-	}
+-	cc := strings.ToLower(strings.Join(h.Values("Cache-Control"), ","))
+-	return !strings.Contains(cc, "private") && !strings.Contains(cc, "no-store") && !strings.Contains(cc, "no-cache")
+-}
+-
+ // Conservatively bypass when clients specify their own freshness constraints.
+ func requestNoCache(r *http.Request) bool {
+ 	return r.Header.Get("Cache-Control") != "" || r.Header.Get("Pragma") != ""
+@@ -614,73 +599,14 @@ func freshUntil(h http.Header, now time.Time, maxTTL int64) (time.Time, bool) {
+ 	if h.Get("Set-Cookie") != "" || h.Get("Vary") != "" || (h.Get("Content-Encoding") != "" && h.Get("Content-Encoding") != "identity") {
+ 		return now, false
+ 	}
+-	ttl := int64(-1)
+-	sharedTTL := int64(-1)
+-	for _, part := range strings.Split(strings.ToLower(strings.Join(h.Values("Cache-Control"), ",")), ",") {
+-		pair := strings.SplitN(strings.TrimSpace(part), "=", 2)
+-		switch pair[0] {
+-		case "private", "no-store", "no-cache":
+-			return now, false
+-		case "max-age":
+-			if len(pair) != 2 {
+-				return now, false
+-			}
+-			n, e := strconv.ParseInt(strings.Trim(pair[1], "\""), 10, 64)
+-			if e != nil || n < 0 {
+-				return now, false
+-			}
+-			if ttl >= 0 {
+-				return now, false
+-			}
+-			ttl = n
+-		case "s-maxage":
+-			if len(pair) != 2 {
+-				return now, false
+-			}
+-			n, e := strconv.ParseInt(strings.Trim(pair[1], "\""), 10, 64)
+-			if e != nil || n < 0 || sharedTTL >= 0 {
+-				return now, false
+-			}
+-			sharedTTL = n
+-		}
+-	}
+-	if sharedTTL >= 0 {
+-		ttl = sharedTTL
+-	}
+-	// No heuristic freshness: only cache explicit origin freshness information.
+-	if ttl < 0 {
+-		ex, e := http.ParseTime(h.Get("Expires"))
+-		if e != nil {
+-			return now, false
+-		}
+-		base := now
+-		if d, e := http.ParseTime(h.Get("Date")); e == nil {
+-			base = d
+-		}
+-		ttl = int64(ex.Sub(base).Seconds())
+-	}
+-	age := int64(0)
+-	if v := h.Get("Age"); v != "" {
+-		n, e := strconv.ParseInt(v, 10, 64)
+-		if e != nil || n < 0 {
+-			return now, false
+-		}
+-		age = n
+-	}
+-	if d, e := http.ParseTime(h.Get("Date")); e == nil {
+-		apparent := int64(now.Sub(d).Seconds())
+-		if apparent > age {
+-			age = apparent
+-		}
+-	}
+-	ttl -= age
+-	if ttl > maxTTL {
+-		ttl = maxTTL
+-	}
+-	if ttl <= 0 {
++	if maxTTL <= 0 {
+ 		return now, false
+ 	}
+-	return now.Add(time.Duration(ttl) * time.Second), true
++	// Deployment policy: origin Cache-Control never vetoes storage, including
++	// private, no-cache and no-store. Retention is local, measured from receipt;
++	// origin Age/Date/Expires do not consume or shorten this local lifetime.
++	// Original response headers are still forwarded unchanged to clients.
++	return now.Add(time.Duration(maxTTL) * time.Second), true
+ }
+ 
+ func validSingleRange(s string) bool {

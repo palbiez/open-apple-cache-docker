@@ -4,6 +4,13 @@ Build and run [Mau2rice0/Open-Apple-Cache](https://github.com/Mau2rice0/Open-App
 on a Linux Docker host. Includes a pinned multi-stage build, persistent state,
 an unprivileged runtime, a healthcheck and the macOS registration helper.
 
+This distribution applies an [origin Cache-Control policy patch](patches/README.md):
+origin response directives, including private/no-cache/no-store, never prevent
+storage. Retention uses the configured `max_ttl_seconds` from receipt. The rule
+also applies to validated reuse across signed URL changes; original response
+headers and the existing authorization, cookie, transfer and resource checks
+are retained. The Docker build applies the included patch before tests/build.
+
 The upstream project is experimental. Native Apple-device discovery requires
 a successful registration by the helper on a Mac. A healthy container and a
 successful smoke test do not prove native discovery.
@@ -35,7 +42,7 @@ docker compose ps -a
 `init` must finish with exit code 0; `cache` should become healthy. The default
 local image is `local/open-apple-cache:docker` and is not pulled from a registry.
 The build runs `go test ./...`, `go vet ./...` and compiles the pinned upstream
-commit. The Go source is pinned; base images use version tags.
+commit with the included patch. The Go source is pinned; base images use version tags.
 
 Both services use the same image. Runtime config, TLS, identity, accounts and
 objects persist in the two bind mounts. Runtime UID/GID is 10001, its root
@@ -129,6 +136,41 @@ For a published image, set your own `IMAGE_REPOSITORY`/`IMAGE_TAG`, build, log i
 to that registry and push with `docker compose push init`. On the destination
 use the same repository/tag and `IMAGE_PULL_POLICY=always`. Source changes to
 the helper integration do not update an existing published image automatically.
+
+## Upgrade to the origin-header policy
+
+The policy is built into the Go binary. Pulling this source or reloading Nginx
+alone does not update an already running container. Before upgrading, privately
+back up `.env`, configuration/TLS and persistent metadata. Keep the old image.
+Use a **new** `IMAGE_TAG` in `.env`, with `IMAGE_PULL_POLICY=never` for a local
+build, then run:
+
+```sh
+git pull --ff-only
+docker compose config --quiet
+docker compose build init
+docker compose up -d --no-build --pull never cache
+docker compose ps -a
+docker compose logs --tail=30 cache
+```
+
+The startup JSON log must contain `"msg":"local cache policy"` and
+`"origin_cache_control":"ignored"`. The image label
+`io.github.palbiez.patchset=ignore-origin-cache-control-v1` also identifies the
+patch. With the generated default configuration, local retention is 86400
+seconds (24 hours). The patch needs no opt-in flag or extension allowlist.
+
+An eligible first GET is stored as `MISS`; repeating it produces `HIT`, even
+when its origin response says `Cache-Control: private`, `no-cache` or `no-store`.
+Those original response headers still reach the client. Client request
+`no-store` and the other checks listed in [patches/README.md](patches/README.md)
+continue to apply. Signed URL reuse still validates a strong ETag and object
+size before serving an existing package under a new URL.
+
+To roll back the running service, restore the saved `.env` that selects the
+old image, then run `docker compose up -d --no-build --pull never cache`.
+Retain the same config/data mounts; do not remove volumes or reset the helper.
+The patch does not change the on-disk object format or registration identity.
 
 ## Optional OMR/router gateway integration
 

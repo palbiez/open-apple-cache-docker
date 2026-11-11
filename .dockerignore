@@ -2,3 +2,5 @@
 !Dockerfile
 !bootstrap.py
 !healthcheck.py
+!patches/
+!patches/**
