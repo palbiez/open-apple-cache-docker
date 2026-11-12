@@ -95,10 +95,12 @@ several minutes and request the same eligible public download on two devices.
 
 ## Smoke test and connection refused
 
-For Apple clients using a PAC/Squid proxy, add the selective Apple bypass
-described in [APPLE-PROXY.md](APPLE-PROXY.md), with a reusable
-[PAC helper](examples/apple-direct.js). Native discovery then chooses the
-registered content cache; other proxy and package-cache rules can stay in place.
+Squid is optional; this deployment does not require a forward proxy. When
+discontinuing a proxy, withdraw its DHCP option 252 offers and disable explicit
+proxy/PAC settings on clients. DHCP withdrawal does not clear an explicitly
+configured PAC URL. If a proxy is retained, the optional selective Apple bypass
+in [APPLE-PROXY.md](APPLE-PROXY.md) includes a reusable
+[PAC helper](examples/apple-direct.js).
 
 From inside the cache container, use its own HTTP listener:
 

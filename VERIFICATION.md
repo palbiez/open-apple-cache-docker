@@ -5,6 +5,21 @@ Checks dated 2026-11-11. Base upstream commit:
 `patches/0001-ignore-origin-cache-control.patch`.
 No private runtime logs, signed URLs or site configuration are included.
 
+## Proxy rollback on 2026-11-12
+
+The reference site restored its pre-Apple-exception PAC and withdrew all six
+DHCP option 252 scope offers plus the earlier test-group offer and four host
+tag references. Other DHCP values were retained. Candidate/runtime syntax,
+DNS resolution and the byte-identical HTTP-served PAC were verified. A real
+DHCPINFORM explicitly requesting option 252 received DHCPACK without it;
+the client's address and lease were not changed.
+
+Squid remains healthy with its configuration retained; running container IDs
+were unchanged. The Apple Go patch and other cache services remain installed.
+An explicitly configured client PAC URL still needs to be disabled separately.
+The selective PAC helper is an optional example, not the current site policy.
+The checks below describe the earlier 2026-11-11 state.
+
 ## Go policy and image build
 
 - `go test -race -count=1 ./...` and `go vet ./...`: passed against the patched

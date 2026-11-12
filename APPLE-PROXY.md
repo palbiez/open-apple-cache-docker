@@ -1,5 +1,14 @@
 # Apple-Inhaltscache zusammen mit Squid und PAC
 
+**Betriebsstand vom 12.11.2026:** Im bisherigen Prüfnetz wurde die Proxy-
+Verteilung auf Nutzerwunsch zurückgenommen. Die PAC ist wieder auf dem Stand vor
+der Apple-Ausnahme, alle DHCP-PAC-Angebote sind entfernt. Squid läuft weiterhin
+optional. Fest eingetragene Client-Proxys/PAC-URLs müssen separat deaktiviert
+werden. Der Apple-Go-Dienst wurde dabei nicht zurückgesetzt.
+
+Die nachfolgende selektive Ausnahme bleibt ein optionales Einbaubeispiel für
+Netze mit beibehaltenem Proxy; sie beschreibt nicht mehr die aktive Standort-PAC.
+
 Ein Apple-Inhaltscache kann neben einem allgemeinen Webproxy, einer Docker-
 Registry und Paket-Caches betrieben werden. Die Clientkonfiguration bestimmt,
 welche Verbindung welchen Dienst verwendet.
@@ -66,7 +75,7 @@ PAC-Regeln gelten nur für Programme, die sie auswerten. Docker-Daemon und APT
 können eigene Registry-/Mirror-/Proxyeinstellungen verwenden; diese werden
 durch die Apple-Ausnahme nicht ersetzt.
 
-Die hier gezeigte Hilfsfunktion entspricht der geprüften aktiven Regel.
+Die hier gezeigte Hilfsfunktion entspricht der am 11.11.2026 geprüften Regel.
 44 Routingfälle unter Windows JScript und 10 Fälle mit der tatsächlich
 ausgelieferten PAC unter Windows WinHTTP waren erfolgreich. Normale Proxy-
 Entscheidungen und Squid-HTTP/HTTPS blieben funktionsfähig. Der native iPhone-
